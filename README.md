@@ -19,6 +19,7 @@ Built for developers who want:
 ## Features
 
 - **Push-to-talk**: Press F9 to start, speak, press F9 to stop and paste
+- **Works everywhere**: Browsers, IDEs, terminals — any text field that accepts paste
 - **Cross-platform**: Linux, Windows, macOS
 - **Local Whisper**: Uses faster-whisper for fast, private transcription
 - **API mode**: Connect to any Whisper-compatible API server
@@ -217,7 +218,7 @@ The server exposes:
 |----------|--------|-------------|
 | `/health` | GET | Check server status |
 | `/transcribe` | POST | Transcribe audio file |
-| `/docs` | GET | Interactive API docs (Swagger) |
+| `/docs` | GET | Interactive web UI — test transcription right in your browser |
 
 **Example with curl:**
 ```bash
@@ -269,6 +270,16 @@ TalkType works seamlessly with [Claude Code](https://claude.ai/code) and similar
 4. Your detailed voice prompt appears in Claude Code
 
 Voice lets you elaborate naturally without self-editing — often resulting in clearer, more detailed prompts.
+
+## Using with Browsers
+
+TalkType works in any browser text field — it's not just for terminals:
+
+1. Focus a text field (Google Docs, ChatGPT, Slack, email composer, etc.)
+2. Press F9, speak, press F9
+3. Your words appear in the browser
+
+Since TalkType uses clipboard + standard paste (Ctrl+V / Cmd+V), it works anywhere that accepts pasted text.
 
 ## Troubleshooting
 
