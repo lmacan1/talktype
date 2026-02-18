@@ -118,8 +118,8 @@ def main():
                         help=f"Compute type: auto, float16, int8 (default: {DEFAULT_COMPUTE})")
     parser.add_argument("--port", "-p", type=int, default=8002,
                         help="Port to run on (default: 8002)")
-    parser.add_argument("--host", default="0.0.0.0",
-                        help="Host to bind to (default: 0.0.0.0)")
+    parser.add_argument("--host", default="127.0.0.1",
+                        help="Host to bind to (default: 127.0.0.1)")
     args = parser.parse_args()
 
     # Update defaults from args
