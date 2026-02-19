@@ -29,6 +29,33 @@ python whisper_server.py --model base  # Terminal 1
 python talktype.py --api http://localhost:8002/transcribe  # Terminal 2
 ```
 
+## CLI Flags
+
+**talktype.py:**
+| Flag | Description |
+|------|-------------|
+| `--api URL` | Use external Whisper API instead of local model |
+| `--model MODEL` | Whisper model: tiny, base, small, medium, large-v3 |
+| `--hotkey KEY` | Hotkey to use (default: f9) |
+| `--language CODE` | Language code (default: auto-detect) |
+| `--minimal` | Minimal UI mode |
+
+**whisper_server.py:**
+| Flag | Description |
+|------|-------------|
+| `--model MODEL` | Whisper model (default: base) |
+| `--device DEVICE` | cuda, cpu, or auto |
+| `--compute TYPE` | float16, int8, or auto |
+| `--port PORT` | Server port (default: 8002) |
+
+### Server API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Server status and config |
+| `/transcribe` | POST | Transcribe audio (multipart: `file`, `language`, `model`) |
+| `/docs` | GET | Interactive Swagger UI |
+
 ## GPU Acceleration
 
 For ~10x faster transcription on NVIDIA GPUs, install CUDA libraries:
@@ -153,6 +180,18 @@ No test suite. Manual testing workflow:
    ```bash
    curl http://localhost:8002/health  # Should return JSON
    ```
+
+### Low mic gain (standalone USB mics)
+
+Some USB mics (like GM300) need gain boost beyond 100%:
+```bash
+# Boost to 200%
+pactl set-source-volume YOUR_SOURCE_NAME 200%
+```
+
+### Wayland
+
+pynput requires X11. On Wayland, run with `GDK_BACKEND=x11` or switch to X11 session.
 
 ### Broken venv
 

@@ -33,7 +33,6 @@ from scipy.io import wavfile
 
 # === Configuration ===
 SAMPLE_RATE = 16000
-LANGUAGE = "en"
 DEFAULT_MODEL = "base"
 SYSTEM = platform.system()  # "Linux", "Windows", "Darwin" (macOS)
 
@@ -105,8 +104,8 @@ Examples:
     )
     parser.add_argument(
         "--language", "-l",
-        default=LANGUAGE,
-        help=f"Language code for transcription (default: {LANGUAGE})"
+        default=None,
+        help="Language code for transcription (default: auto-detect)"
     )
     parser.add_argument(
         "--minimal", "-M",
