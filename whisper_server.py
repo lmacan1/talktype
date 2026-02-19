@@ -18,6 +18,19 @@ Then run TalkType with:
 import argparse
 import os
 import tempfile
+
+# Auto-configure CUDA library paths if nvidia packages are installed
+def _setup_cuda_paths():
+    try:
+        import nvidia.cublas.lib
+        import nvidia.cudnn.lib
+        paths = [nvidia.cublas.lib.__path__[0], nvidia.cudnn.lib.__path__[0]]
+        existing = os.environ.get("LD_LIBRARY_PATH", "")
+        os.environ["LD_LIBRARY_PATH"] = ":".join(paths + ([existing] if existing else []))
+    except ImportError:
+        pass  # CUDA packages not installed, use CPU
+
+_setup_cuda_paths()
 from typing import Dict, Tuple
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -26,8 +39,8 @@ import uvicorn
 
 # === Configuration ===
 DEFAULT_MODEL = os.getenv("WHISPER_MODEL", "base")
-DEFAULT_DEVICE = os.getenv("WHISPER_DEVICE", "auto")  # "auto", "cuda", or "cpu"
-DEFAULT_COMPUTE = os.getenv("WHISPER_COMPUTE", "auto")  # "auto", "float16", "int8"
+DEFAULT_DEVICE = os.getenv("WHISPER_DEVICE", "cuda")  # "cuda", "cpu", or "auto"
+DEFAULT_COMPUTE = os.getenv("WHISPER_COMPUTE", "float16")  # "float16", "int8", "auto"
 
 # === Model Cache ===
 _models: Dict[Tuple[str, str, str], WhisperModel] = {}

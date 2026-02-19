@@ -59,3 +59,46 @@ No test suite. Manual testing workflow:
 2. Focus a text field (terminal or browser)
 3. Press F9, speak, press F9
 4. Verify text appears correctly
+
+## Troubleshooting
+
+### "No speech detected" (error beep after recording)
+
+**Symptom:** Start/stop beeps work, but always get error beep indicating no speech.
+
+**Common causes:**
+
+1. **Wrong audio input device** — PipeWire/PulseAudio default may not be your microphone
+   ```bash
+   # Check which device is actually capturing:
+   pactl list sources short
+
+   # Set correct input (e.g., GM300 USB mic):
+   pactl set-default-source alsa_input.usb-YOUR_DEVICE_NAME
+   ```
+
+2. **Audio energy below threshold** — The `has_speech()` function in `talktype.py` rejects audio with energy < 0.01
+   ```bash
+   # Test your mic levels:
+   python -c "
+   import sounddevice as sd
+   import numpy as np
+   audio = sd.rec(32000, samplerate=16000, channels=1, dtype='float32')
+   sd.wait()
+   energy = np.sqrt(np.mean(audio ** 2))
+   print(f'Energy: {energy:.4f} (threshold: 0.01)')
+   "
+   ```
+   If energy is below 0.01, either increase mic gain or lower the threshold in code.
+
+3. **Whisper server not running** — When using `--api` mode
+   ```bash
+   curl http://localhost:8002/health  # Should return JSON
+   ```
+
+### Broken venv
+
+If you see "bad interpreter" errors, the venv has stale path references. Recreate it:
+```bash
+rm -rf venv && python3 -m venv venv && ./venv/bin/pip install -r requirements.txt
+```
