@@ -472,7 +472,7 @@ def paste_text(text: str):
 
     elif SYSTEM == "Darwin":
         import pyautogui
-        pyautogui.hotkey('command', 'v')
+        pyautogui.hotkey('command', 'v', interval=0.05)  # 50ms between keys for cold start reliability
 
     # Restore old clipboard
     if old_clipboard:
