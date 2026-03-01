@@ -17,11 +17,13 @@ Examples:
 
 import argparse
 import io
+import json
 import platform
 import subprocess
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -30,6 +32,7 @@ import requests
 import sounddevice as sd
 from pynput import keyboard
 from scipy.io import wavfile
+import yaml
 
 # === Configuration ===
 SAMPLE_RATE = 16000
@@ -68,10 +71,121 @@ stream: sd.InputStream | None = None
 target_window = None
 whisper_model = None
 config = None
+history = None  # TranscriptionHistory instance
+
+
+class TranscriptionHistory:
+    """Persists transcriptions to ~/.cache/talktype/history.jsonl for recovery."""
+
+    def __init__(self, max_entries: int = 100):
+        self.max_entries = max_entries
+        self.cache_dir = Path.home() / ".cache" / "talktype"
+        self.history_file = self.cache_dir / "history.jsonl"
+        self.pending_audio = self.cache_dir / "pending.wav"
+        self._last: dict | None = None
+        self._ensure_dir()
+
+    def _ensure_dir(self):
+        """Create cache directory if needed."""
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def add(self, text: str):
+        """Add transcription to history."""
+        entry = {"timestamp": datetime.now().isoformat(), "text": text}
+        self._last = entry
+        try:
+            with open(self.history_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry) + "\n")
+            self._maybe_trim()
+        except Exception:
+            pass  # Don't crash on history write failure
+
+    def get_last(self) -> str | None:
+        """Get last transcription text."""
+        if self._last:
+            return self._last["text"]
+        # Fallback: read from file
+        try:
+            with open(self.history_file, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+                if lines:
+                    return json.loads(lines[-1])["text"]
+        except Exception:
+            pass
+        return None
+
+    def _maybe_trim(self):
+        """Trim history file if it exceeds max_entries."""
+        try:
+            with open(self.history_file, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            if len(lines) > self.max_entries * 1.5:  # Only trim when 50% over
+                with open(self.history_file, "w", encoding="utf-8") as f:
+                    f.writelines(lines[-self.max_entries:])
+        except Exception:
+            pass
+
+    def save_pending_audio(self, wav_buffer: io.BytesIO):
+        """Save audio before transcription attempt."""
+        try:
+            wav_buffer.seek(0)
+            with open(self.pending_audio, "wb") as f:
+                f.write(wav_buffer.read())
+            wav_buffer.seek(0)  # Reset for transcription
+        except Exception:
+            pass
+
+    def clear_pending_audio(self):
+        """Delete pending audio after successful transcription."""
+        try:
+            self.pending_audio.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    def get_pending_audio(self) -> bytes | None:
+        """Get pending audio for retry (expires after 1 hour)."""
+        try:
+            if self.pending_audio.exists():
+                # Check if not too old (1 hour max)
+                age = time.time() - self.pending_audio.stat().st_mtime
+                if age > 3600:
+                    self.clear_pending_audio()
+                    return None
+                return self.pending_audio.read_bytes()
+        except Exception:
+            pass
+        return None
+
+
+# === Config File Loading ===
+CONFIG_PATH = Path.home() / ".config" / "talktype" / "config.yaml"
+
+
+def load_config_file() -> dict:
+    """Load config from YAML file if it exists."""
+    if CONFIG_PATH.exists():
+        try:
+            with open(CONFIG_PATH) as f:
+                return yaml.safe_load(f) or {}
+        except Exception:
+            pass
+    return {}
 
 
 # === Argument Parsing ===
 def parse_args():
+    # Load config file first (CLI args will override)
+    file_config = load_config_file()
+    hotkeys = file_config.get("hotkeys", {})
+    trans = file_config.get("transcription", {})
+    ui = file_config.get("ui", {})
+    hist = file_config.get("history", {})
+
+    # Determine API default from config
+    api_default = None
+    if trans.get("mode") == "api":
+        api_default = trans.get("api_url")
+
     parser = argparse.ArgumentParser(
         description="Push-to-talk voice typing for your terminal.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -81,10 +195,12 @@ Examples:
   python talktype.py --api http://localhost:8002/transcribe
   python talktype.py --model small       # Use 'small' model for better accuracy
   python talktype.py --hotkey f8         # Use F8 instead of F9
+  python talktype.py --setup             # Run setup wizard
         """
     )
     parser.add_argument(
         "--api", "-a",
+        default=api_default,
         help="Whisper API URL (if not set, uses local faster-whisper)"
     )
     parser.add_argument(
@@ -94,23 +210,45 @@ Examples:
     )
     parser.add_argument(
         "--model", "-m",
-        default=DEFAULT_MODEL,
+        default=trans.get("model", DEFAULT_MODEL),
         help=f"Whisper model size: tiny, base, small, medium, large-v3 (default: {DEFAULT_MODEL})"
     )
     parser.add_argument(
         "--hotkey", "-k",
-        default="f9",
+        default=hotkeys.get("record", "f9"),
         help="Hotkey to use (default: f9). Examples: f8, f10, f12"
     )
     parser.add_argument(
         "--language", "-l",
-        default=None,
+        default=trans.get("language"),
         help="Language code for transcription (default: auto-detect)"
     )
     parser.add_argument(
         "--minimal", "-M",
         action="store_true",
+        default=ui.get("minimal", False),
         help="Minimal UI - only show status (great for demos)"
+    )
+    parser.add_argument(
+        "--history-limit",
+        type=int,
+        default=hist.get("limit", 100),
+        help="Maximum transcriptions to keep in history (default: 100)"
+    )
+    parser.add_argument(
+        "--recovery-hotkey",
+        default=hotkeys.get("recovery", "f8"),
+        help="Hotkey to recover/re-paste last transcription (default: f8)"
+    )
+    parser.add_argument(
+        "--retry-hotkey",
+        default=hotkeys.get("retry", "f7"),
+        help="Hotkey to retry failed transcription from saved audio (default: f7)"
+    )
+    parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="Run setup wizard (reconfigure settings)"
     )
     return parser.parse_args()
 
@@ -426,16 +564,27 @@ def transcribe(audio: np.ndarray) -> str:
     audio_int16 = (audio * 32767).astype(np.int16)
     wav_buffer = io.BytesIO()
     wavfile.write(wav_buffer, SAMPLE_RATE, audio_int16)
+
+    # Save pending audio BEFORE transcription (for retry on failure)
+    if history:
+        history.save_pending_audio(wav_buffer)
+
     wav_buffer.seek(0)
 
     if config.api:
-        return transcribe_api(wav_buffer)
+        text = transcribe_api(wav_buffer)
     else:
         # Use local model
         wav_buffer.seek(0)
         audio_for_whisper = audio.astype(np.float32)
         segments, _ = whisper_model.transcribe(audio_for_whisper, language=config.language)
-        return " ".join(seg.text for seg in segments).strip()
+        text = " ".join(seg.text for seg in segments).strip()
+
+    # Clear pending audio on success
+    if history and text:
+        history.clear_pending_audio()
+
+    return text
 
 
 # === Paste ===
@@ -474,10 +623,12 @@ def paste_text(text: str):
         import pyautogui
         pyautogui.hotkey('command', 'v', interval=0.05)  # 50ms between keys for cold start reliability
 
-    # Restore old clipboard
+    # Restore old clipboard (scale delay by text length to avoid race condition)
     if old_clipboard:
         def restore():
-            time.sleep(0.5)
+            # Base 1.0s + 10ms per 100 chars, capped at 3.0s
+            delay = min(3.0, max(1.0, 1.0 + len(text) * 0.0001))
+            time.sleep(delay)
             try:
                 pyperclip.copy(old_clipboard)
             except:
@@ -493,6 +644,9 @@ def transcribe_and_paste(audio: np.ndarray):
         text = transcribe(audio)
         if text and not is_hallucination(text):
             paste_text(" " + text)  # Space to separate from previous
+            # Save to history for recovery
+            if history:
+                history.add(text)
             beep_success()
             set_terminal_title("TalkType ✅")
             show_status("✅ DONE", text[:50])
@@ -500,10 +654,14 @@ def transcribe_and_paste(audio: np.ndarray):
             beep_error()
             set_terminal_title("TalkType")
             show_status("❌ NO SPEECH", "Nothing detected")
+            # Clear pending audio - no point retrying silence
+            if history:
+                history.clear_pending_audio()
     except Exception as e:
         beep_error()
         set_terminal_title("TalkType ❌")
-        show_status("❌ ERROR", str(e)[:30])
+        show_status("❌ FAILED", "F7 to retry")
+        # Keep pending audio for retry - don't clear it
     finally:
         with state_lock:
             state = State.IDLE
@@ -549,9 +707,114 @@ def create_hotkey_handler(hotkey):
     return on_press
 
 
+def create_recovery_handler(recovery_key):
+    """Create the recovery hotkey handler (re-paste last transcription)."""
+    def on_press(key):
+        if key != recovery_key:
+            return
+
+        with state_lock:
+            if state != State.IDLE:
+                return  # Only recover when idle
+
+        if not history:
+            beep_error()
+            return
+
+        last_text = history.get_last()
+        if not last_text:
+            beep_error()
+            show_status("❌ NO HISTORY", "Nothing to recover")
+            return
+
+        # Re-paste the last transcription
+        paste_text(" " + last_text)
+        beep_success()
+        set_terminal_title("TalkType ↩️")
+        show_status("↩️ RECOVERED", last_text[:50])
+
+    return on_press
+
+
+def create_retry_handler(retry_key):
+    """Create the retry hotkey handler (re-transcribe from saved audio)."""
+    def on_press(key):
+        if key != retry_key:
+            return
+
+        with state_lock:
+            if state != State.IDLE:
+                return  # Only retry when idle
+
+        if not history:
+            beep_error()
+            return
+
+        pending = history.get_pending_audio()
+        if not pending:
+            beep_error()
+            show_status("❌ NO PENDING", "Nothing to retry")
+            return
+
+        # Re-transcribe from saved WAV
+        set_terminal_title("TalkType 🔄")
+        show_status("🔄 RETRYING", "Re-transcribing...")
+
+        try:
+            wav_buffer = io.BytesIO(pending)
+            if config.api:
+                text = transcribe_api(wav_buffer)
+            else:
+                # Load audio from WAV for local transcription
+                wav_buffer.seek(0)
+                # Skip WAV header (44 bytes) and convert to float32
+                audio = np.frombuffer(wav_buffer.read()[44:], dtype=np.int16).astype(np.float32) / 32767
+                segments, _ = whisper_model.transcribe(audio, language=config.language)
+                text = " ".join(seg.text for seg in segments).strip()
+
+            if text and not is_hallucination(text):
+                paste_text(" " + text)
+                if history:
+                    history.add(text)
+                    history.clear_pending_audio()
+                beep_success()
+                set_terminal_title("TalkType ✅")
+                show_status("✅ RETRIED", text[:50])
+            else:
+                beep_error()
+                show_status("❌ NO SPEECH", "")
+                if history:
+                    history.clear_pending_audio()
+        except Exception as e:
+            beep_error()
+            set_terminal_title("TalkType ❌")
+            show_status("❌ RETRY FAILED", str(e)[:30])
+            # Keep pending audio for another retry attempt
+
+    return on_press
+
+
 def main():
-    global config
+    global config, history
+
+    # Check for first run or --setup flag
+    if "--setup" in sys.argv or not CONFIG_PATH.exists():
+        try:
+            from setup_wizard import run_wizard
+            result = run_wizard()
+            # run_wizard returns (config, should_run)
+            if isinstance(result, tuple):
+                _, should_run = result
+                if not should_run:
+                    sys.exit(0)
+        except ImportError:
+            print("Setup wizard not available. Using defaults.")
+        except KeyboardInterrupt:
+            print("\nSetup cancelled.")
+            sys.exit(0)
+
     config = parse_args()
+    history = TranscriptionHistory(max_entries=config.history_limit)
 
     print("TalkType - Voice Typing for Your Terminal")
     print("=" * 45)
@@ -561,20 +824,35 @@ def main():
     load_whisper_model()
 
     hotkey = get_hotkey(config.hotkey)
+    recovery_key = get_hotkey(config.recovery_hotkey)
+    retry_key = get_hotkey(config.retry_hotkey)
     set_terminal_title("TalkType - Ready")
 
     if config.minimal:
         show_status("● READY", f"Press {config.hotkey.upper()} to record")
     else:
-        print(f"\nReady! Press {config.hotkey.upper()} to record.")
+        print(f"\nReady! Press {config.hotkey.upper()} to record, {config.recovery_hotkey.upper()} to recover, {config.retry_hotkey.upper()} to retry.")
         print("Press Ctrl+C to exit.\n")
 
-    handler = create_hotkey_handler(hotkey)
-    with keyboard.Listener(on_press=handler) as listener:
-        try:
-            listener.join()
-        except KeyboardInterrupt:
-            print("\nBye!")
+    # Create handlers for all hotkeys
+    record_handler = create_hotkey_handler(hotkey)
+    recovery_handler = create_recovery_handler(recovery_key)
+    retry_handler = create_retry_handler(retry_key)
+
+    def combined_handler(key):
+        record_handler(key)
+        recovery_handler(key)
+        retry_handler(key)
+
+    # Use signal handler for clean Ctrl+C exit
+    import signal
+    def signal_handler(sig, frame):
+        print("\nBye!")
+        sys.exit(0)
+    signal.signal(signal.SIGINT, signal_handler)
+
+    with keyboard.Listener(on_press=combined_handler) as listener:
+        listener.join()
 
 
 if __name__ == "__main__":
