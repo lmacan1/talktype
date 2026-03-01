@@ -32,7 +32,11 @@ Built for developers who want:
 ### Quick Install (Linux)
 
 ```bash
-git clone https://github.com/lmacan1/talktype.git && cd talktype && ./install.sh
+git clone https://github.com/lmacan1/talktype.git && cd talktype
+sudo apt install xdotool xclip portaudio19-dev
+python3 -m venv venv && source venv/bin/activate
+pip install -e .
+talktype  # Setup wizard launches automatically
 ```
 
 ### Manual Install - Linux (Ubuntu/Debian)
@@ -46,54 +50,67 @@ git clone https://github.com/lmacan1/talktype.git
 cd talktype
 python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
+pip install -e .  # Installs 'talktype' command
 ```
 
 ### Windows
 
 ```powershell
-# Clone and install
 git clone https://github.com/lmacan1/talktype.git
 cd talktype
 python -m venv venv
 .\venv\Scripts\activate
-pip install -r requirements.txt
+pip install -e .
+talktype  # Setup wizard launches automatically
 ```
 
 ### macOS
 
 ```bash
-# System dependencies
 brew install portaudio
-
-# Clone and install
 git clone https://github.com/lmacan1/talktype.git
 cd talktype
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+python3 -m venv venv && source venv/bin/activate
+pip install -e .
+talktype  # Setup wizard launches automatically
 ```
 
 ## Usage
 
+### First Run — Setup Wizard
+
+On first launch, TalkType runs an interactive setup wizard:
+
+```bash
+talktype
+```
+
+The wizard lets you:
+- Choose transcription mode (local server, cloud API, or local model)
+- Set hotkeys by pressing them (not typing)
+- Select Whisper model and language
+- Optionally install as a system service (runs on login)
+
+Config is saved to `~/.config/talktype/config.yaml`. Re-run anytime with `talktype --setup`.
+
 ### Basic Usage
 
 ```bash
-# Activate virtual environment
-source venv/bin/activate  # Linux/macOS
-# or: .\venv\Scripts\activate  # Windows
-
-# Run TalkType
-python talktype.py
+talktype  # Uses saved config
 ```
 
-First run will download the Whisper model (~150MB for `base`).
-
-Then:
-1. Press **F9** to start recording (you'll hear a beep)
+1. Press **F9** to start recording (beep)
 2. Speak your text
-3. Press **F9** again to stop and paste (another beep)
+3. Press **F9** again to stop and paste (beep)
 4. Your words appear in the focused window
+
+### Recovery Hotkeys
+
+| Key | What it does |
+|-----|-------------|
+| **F9** | Record / Stop & Paste |
+| **F8** | Re-paste last transcription (if paste failed) |
+| **F7** | Retry transcription (if API timed out) |
 
 ### Options
 
@@ -229,7 +246,9 @@ curl -X POST http://localhost:8002/transcribe \
 
 ## Running as a Service (Linux)
 
-To have TalkType start automatically on login:
+The setup wizard can install TalkType as a systemd service automatically — just select "Run at startup" when prompted.
+
+Or install manually:
 
 ```bash
 # Create systemd user service
@@ -242,7 +261,7 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=/path/to/talktype/venv/bin/python /path/to/talktype/talktype.py
+ExecStart=/path/to/talktype/venv/bin/talktype
 Restart=on-failure
 RestartSec=5
 Environment=DISPLAY=:0
@@ -255,9 +274,13 @@ EOF
 systemctl --user daemon-reload
 systemctl --user enable talktype
 systemctl --user start talktype
+```
 
-# Check status
-systemctl --user status talktype
+Manage with:
+```bash
+systemctl --user status talktype   # Check status
+systemctl --user stop talktype     # Stop
+systemctl --user restart talktype  # Restart
 ```
 
 ## Using with Claude Code
