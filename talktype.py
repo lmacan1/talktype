@@ -16,8 +16,11 @@ Examples:
 """
 
 import argparse
+import atexit
+import fcntl
 import io
 import json
+import os
 import platform
 import subprocess
 import sys
@@ -78,6 +81,9 @@ _last_hotkey_time: float = 0.0
 _last_paste_time: float = 0.0
 HOTKEY_DEBOUNCE_MS = 300  # Ignore hotkey presses within 300ms
 PASTE_DEBOUNCE_MS = 500   # Ignore paste calls within 500ms
+
+# Debug logging for paste investigation (set to True to diagnose issues)
+DEBUG_PASTE = False
 
 
 class TranscriptionHistory:
@@ -480,12 +486,21 @@ def stop_recording() -> np.ndarray:
 # Phrases that indicate Whisper is hallucinating on silence
 HALLUCINATION_PHRASES = [
     "thanks for watching", "thank you for watching", "thanks for listening",
-    "thank you for listening", "subscribe", "like and subscribe",
-    "see you next time", "the end", "silence", "no speech",
-    "inaudible", "[music]", "(music)",
+    "thank you for listening", "thank you", "thanks", "subscribe",
+    "like and subscribe", "see you next time", "see you later",
+    "the end", "silence", "no speech", "inaudible", "[music]", "(music)",
+    "please subscribe", "don't forget to subscribe", "hit the bell",
+    "leave a comment", "see you in the next", "bye bye", "good bye",
+    "take care", "have a nice day", "have a good day", "peace out",
+    "cheers", "ciao", "adios", "auf wiedersehen", "さようなら",
+    "...", "♪", "music playing", "background noise", "applause",
 ]
 # Single words that are hallucinations when they're the ENTIRE output
-HALLUCINATION_WORDS = {"you", "i", "so", "uh", "um", "hmm", "huh", "ah", "oh", "bye", "goodbye"}
+HALLUCINATION_WORDS = {
+    "you", "i", "so", "uh", "um", "hmm", "huh", "ah", "oh", "bye",
+    "goodbye", "thanks", "okay", "ok", "yes", "no", "yeah", "yep",
+    "nope", "well", "right", "hey", "hi", "hello", "what", "hm",
+}
 
 
 def is_hallucination(text: str) -> bool:
@@ -601,8 +616,16 @@ def paste_text(text: str):
     # Debounce: prevent pasting twice within PASTE_DEBOUNCE_MS
     now = time.time() * 1000
     if now - _last_paste_time < PASTE_DEBOUNCE_MS:
+        if DEBUG_PASTE:
+            print(f"[DEBUG] paste_text BLOCKED by debounce (delta={now - _last_paste_time:.0f}ms)")
         return  # Skip duplicate paste
     _last_paste_time = now
+
+    if DEBUG_PASTE:
+        import traceback
+        print(f"[DEBUG] paste_text called at {now:.0f}ms")
+        print(f"[DEBUG] text length: {len(text)}, preview: {text[:50]!r}")
+        print(f"[DEBUG] call stack:\n{''.join(traceback.format_stack()[-4:-1])}")
 
     # Save old clipboard
     try:
@@ -623,7 +646,13 @@ def paste_text(text: str):
 
     if SYSTEM == "Linux":
         key = "ctrl+shift+v" if is_terminal else "ctrl+v"
-        subprocess.run(["xdotool", "key", key], stderr=subprocess.DEVNULL)
+        if DEBUG_PASTE:
+            print(f"[DEBUG] xdotool sending: {key} (is_terminal={is_terminal})")
+        # Use --clearmodifiers to prevent interference from held modifier keys
+        # Use --delay to ensure clean key release
+        subprocess.run(["xdotool", "key", "--clearmodifiers", "--delay", "50", key], stderr=subprocess.DEVNULL)
+        if DEBUG_PASTE:
+            print(f"[DEBUG] xdotool completed")
 
     elif SYSTEM == "Windows":
         import pyautogui
@@ -814,8 +843,39 @@ def create_retry_handler(retry_key):
     return on_press
 
 
+def acquire_instance_lock():
+    """Ensure only one instance of TalkType runs at a time."""
+    lock_file = Path.home() / ".cache" / "talktype" / "talktype.lock"
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Open lock file (create if doesn't exist)
+    lock_fd = open(lock_file, 'w')
+
+    try:
+        # Try to acquire exclusive lock (non-blocking)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # Write our PID
+        lock_fd.write(str(os.getpid()))
+        lock_fd.flush()
+        # Keep the file open to maintain the lock
+        return lock_fd
+    except BlockingIOError:
+        # Another instance is running
+        try:
+            with open(lock_file, 'r') as f:
+                pid = f.read().strip()
+            print(f"TalkType is already running (PID {pid})")
+        except:
+            print("TalkType is already running")
+        sys.exit(1)
+
+
 def main():
     global config, history
+
+    # Ensure single instance
+    lock_fd = acquire_instance_lock()
+    atexit.register(lambda: lock_fd.close())
 
     # Check for first run or --setup flag
     if "--setup" in sys.argv or not CONFIG_PATH.exists():
