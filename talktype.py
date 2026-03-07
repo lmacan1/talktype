@@ -73,6 +73,12 @@ whisper_model = None
 config = None
 history = None  # TranscriptionHistory instance
 
+# Debouncing to prevent double-paste and accidental re-triggers
+_last_hotkey_time: float = 0.0
+_last_paste_time: float = 0.0
+HOTKEY_DEBOUNCE_MS = 300  # Ignore hotkey presses within 300ms
+PASTE_DEBOUNCE_MS = 500   # Ignore paste calls within 500ms
+
 
 class TranscriptionHistory:
     """Persists transcriptions to ~/.cache/talktype/history.jsonl for recovery."""
@@ -590,6 +596,14 @@ def transcribe(audio: np.ndarray) -> str:
 # === Paste ===
 def paste_text(text: str):
     """Paste text into the target window."""
+    global _last_paste_time
+
+    # Debounce: prevent pasting twice within PASTE_DEBOUNCE_MS
+    now = time.time() * 1000
+    if now - _last_paste_time < PASTE_DEBOUNCE_MS:
+        return  # Skip duplicate paste
+    _last_paste_time = now
+
     # Save old clipboard
     try:
         old_clipboard = pyperclip.paste()
@@ -686,9 +700,15 @@ def get_hotkey(key_name: str):
 def create_hotkey_handler(hotkey):
     """Create the hotkey handler function."""
     def on_press(key):
-        global state
+        global state, _last_hotkey_time
         if key != hotkey:
             return
+
+        # Debounce: ignore rapid key repeats
+        now = time.time() * 1000
+        if now - _last_hotkey_time < HOTKEY_DEBOUNCE_MS:
+            return
+        _last_hotkey_time = now
 
         with state_lock:
             if state == State.IDLE:
