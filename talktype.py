@@ -759,6 +759,7 @@ def create_hotkey_handler(hotkey):
 def create_recovery_handler(recovery_key):
     """Create the recovery hotkey handler (re-paste last transcription)."""
     def on_press(key):
+        global target_window
         if key != recovery_key:
             return
 
@@ -776,6 +777,9 @@ def create_recovery_handler(recovery_key):
             show_status("❌ NO HISTORY", "Nothing to recover")
             return
 
+        # Store the current window so we know where to paste back
+        target_window = get_active_window()
+
         # Re-paste the last transcription
         paste_text(" " + last_text)
         beep_success()
@@ -788,6 +792,7 @@ def create_recovery_handler(recovery_key):
 def create_retry_handler(retry_key):
     """Create the retry hotkey handler (re-transcribe from saved audio)."""
     def on_press(key):
+        global target_window
         if key != retry_key:
             return
 
@@ -804,6 +809,9 @@ def create_retry_handler(retry_key):
             beep_error()
             show_status("❌ NO PENDING", "Nothing to retry")
             return
+
+        # Store the current window so we know where to paste back
+        target_window = get_active_window()
 
         # Re-transcribe from saved WAV
         set_terminal_title("TalkType 🔄")
