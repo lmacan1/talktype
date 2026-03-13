@@ -40,6 +40,7 @@ import yaml
 SAMPLE_RATE = 16000
 DEFAULT_MODEL = "base"
 SYSTEM = platform.system()  # "Linux", "Windows", "Darwin" (macOS)
+TRANSCRIPTIONS_FILE = Path.home() / ".config" / "talktype" / "transcripts"
 
 # Terminal identifiers per OS
 TERMINALS = {
@@ -339,6 +340,62 @@ def beep_success():
     beep(660, 0.08)
 
 
+def _notification_with_copy(title: str, body: str, full_text: str, persistent: bool = False):
+    """Show notification with Copy button, copy to clipboard if clicked."""
+    try:
+        timeout = "0" if persistent else "5000"
+        cmd = ["notify-send", title, body, "-t", timeout]
+        if persistent:
+            cmd.extend(["--urgency=critical"])
+        if full_text:
+            cmd.extend(["--action=copy=Copy to Clipboard"])
+        proc = subprocess.run(
+            cmd,
+            capture_output=True, text=True, timeout=300 if persistent else 30,
+        )
+        if full_text and proc.stdout.strip() == "copy":
+            subprocess.run(
+                ["xclip", "-selection", "clipboard"],
+                input=full_text, text=True,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+
+def send_notification(title: str, body: str = "", full_text: str = "", persistent: bool = False):
+    """Send a desktop notification. persistent=True makes it stick until dismissed."""
+    try:
+        if SYSTEM == "Linux":
+            threading.Thread(
+                target=_notification_with_copy,
+                args=(title, body, full_text, persistent),
+                daemon=True,
+            ).start()
+        elif SYSTEM == "Darwin":
+            script = f'display notification "{body}" with title "{title}"'
+            subprocess.Popen(
+                ["osascript", "-e", script],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        elif SYSTEM == "Windows":
+            ps = (
+                "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null; "
+                f'$xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent(0); '
+                f'$text = $xml.GetElementsByTagName("text"); '
+                f'$text[0].AppendChild($xml.CreateTextNode("{title}")) > $null; '
+                f'$text[1].AppendChild($xml.CreateTextNode("{body}")) > $null; '
+                f'$toast = [Windows.UI.Notifications.ToastNotification]::new($xml); '
+                f'[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("TalkType").Show($toast)'
+            )
+            subprocess.Popen(
+                ["powershell", "-Command", ps],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+    except FileNotFoundError:
+        pass  # Notification tool not installed
+
+
 # === Terminal Title (visual status) ===
 def set_terminal_title(title: str):
     """Set terminal window title for visual status."""
@@ -560,7 +617,7 @@ def transcribe_api(wav_buffer: io.BytesIO) -> str:
         files = {"file": ("audio.wav", wav_buffer, "audio/wav")}
         data = {"language": config.language}
 
-    resp = requests.post(config.api, files=files, data=data, timeout=60)
+    resp = requests.post(config.api, files=files, data=data, timeout=240)
     resp.raise_for_status()
 
     # Handle both JSON {"text": "..."} and plain text responses
@@ -679,28 +736,67 @@ def paste_text(text: str):
 
 
 # === Main Logic ===
+def save_transcription_pending() -> str:
+    """Write a pending timestamp to the transcripts file before transcription.
+
+    Returns the timestamp string so it can be referenced in the completion entry.
+    """
+    try:
+        TRANSCRIPTIONS_FILE.parent.mkdir(exist_ok=True)
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(TRANSCRIPTIONS_FILE, "a", encoding="utf-8") as f:
+            f.write(f"[{timestamp}] ...\n")
+        return timestamp
+    except Exception:
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def save_transcription_result(timestamp: str, text: str | None = None, error: str | None = None):
+    """Append the transcription result (or error) below the pending entry."""
+    try:
+        TRANSCRIPTIONS_FILE.parent.mkdir(exist_ok=True)
+        with open(TRANSCRIPTIONS_FILE, "a", encoding="utf-8") as f:
+            if text:
+                f.write(f"{text}\n\n\n")
+            elif error:
+                f.write(f"FAILED: {error}\n\n\n")
+            else:
+                f.write(f"(no speech detected)\n\n\n")
+    except Exception:
+        pass  # Don't crash on save failure
+
+
 def transcribe_and_paste(audio: np.ndarray):
     """Background thread: transcribe and paste."""
     global state
+    # Write pending entry to transcripts BEFORE calling Whisper
+    ts = save_transcription_pending()
     try:
         text = transcribe(audio)
         if text and not is_hallucination(text):
             paste_text(" " + text)  # Space to separate from previous
+            # Complete the transcript entry
+            save_transcription_result(ts, text=text)
             # Save to history for recovery
             if history:
                 history.add(text)
             beep_success()
+            send_notification("TalkType", f"Transcription done: {text[:80]}", full_text=text)
             set_terminal_title("TalkType ✅")
             show_status("✅ DONE", text[:50])
         else:
+            save_transcription_result(ts)
             beep_error()
+            send_notification("TalkType", "No speech detected", persistent=True)
             set_terminal_title("TalkType")
             show_status("❌ NO SPEECH", "Nothing detected")
             # Clear pending audio - no point retrying silence
             if history:
                 history.clear_pending_audio()
     except Exception as e:
+        save_transcription_result(ts, error=str(e))
         beep_error()
+        send_notification("TalkType", f"Transcription failed: {str(e)[:80]}. Press F7 to retry.", persistent=True)
         set_terminal_title("TalkType ❌")
         show_status("❌ FAILED", str(e)[:50])
         # Keep pending audio for retry - don't clear it
