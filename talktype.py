@@ -376,14 +376,15 @@ def get_active_window():
         if SYSTEM == "Linux":
             return subprocess.check_output(
                 ["xdotool", "getactivewindow"],
-                stderr=subprocess.DEVNULL
+                stderr=subprocess.DEVNULL,
+                timeout=1.0
             ).strip()
         elif SYSTEM == "Windows":
             import ctypes
             return ctypes.windll.user32.GetForegroundWindow()
         elif SYSTEM == "Darwin":
             script = 'tell application "System Events" to get name of first process whose frontmost is true'
-            result = subprocess.check_output(["osascript", "-e", script], stderr=subprocess.DEVNULL)
+            result = subprocess.check_output(["osascript", "-e", script], stderr=subprocess.DEVNULL, timeout=1.0)
             return result.strip()
     except:
         return None
@@ -477,7 +478,21 @@ def stop_recording() -> np.ndarray:
 
     if not audio_chunks:
         return np.array([], dtype=np.float32)
-    return np.concatenate(audio_chunks).flatten()
+    
+    audio = np.concatenate(audio_chunks).flatten()
+    
+    # NEW: Save pending audio IMMEDIATELY after recording stops
+    # This prevents data loss if transcription hangs or crashes
+    if history and len(audio) >= SAMPLE_RATE * 0.5:
+        try:
+            audio_int16 = (audio * 32767).astype(np.int16)
+            wav_buffer = io.BytesIO()
+            wavfile.write(wav_buffer, SAMPLE_RATE, audio_int16)
+            history.save_pending_audio(wav_buffer)
+        except Exception as e:
+            print(f"Warning: Failed to save emergency backup: {e}")
+
+    return audio
 
 
 # === Transcription ===
@@ -547,6 +562,7 @@ def transcribe_api(wav_buffer: io.BytesIO) -> str:
     """Transcribe using API (supports OpenAI-compatible and custom APIs)."""
     wav_buffer.seek(0)
 
+    headers = {}
     if is_openai_api(config.api):
         # OpenAI-compatible API format
         files = {"file": ("audio.wav", wav_buffer, "audio/wav")}
@@ -555,12 +571,22 @@ def transcribe_api(wav_buffer: io.BytesIO) -> str:
             "language": config.language,
             "response_format": "json"
         }
+        
+        # Add Authorization header if API key is set
+        if "groq" in config.api.lower():
+            api_key = os.getenv("GROQ_API_KEY")
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+        elif "openai" in config.api.lower():
+            api_key = os.getenv("OPENAI_API_KEY")
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
     else:
         # Custom API format (e.g., local faster-whisper server)
         files = {"file": ("audio.wav", wav_buffer, "audio/wav")}
         data = {"language": config.language}
 
-    resp = requests.post(config.api, files=files, data=data, timeout=240)
+    resp = requests.post(config.api, files=files, data=data, headers=headers, timeout=240)
     resp.raise_for_status()
 
     # Handle both JSON {"text": "..."} and plain text responses
@@ -960,7 +986,7 @@ def main():
     import signal
     def signal_handler(sig, frame):
         print("\nBye!")
-        sys.exit(0)
+        os._exit(0)
     signal.signal(signal.SIGINT, signal_handler)
 
     with keyboard.Listener(on_press=combined_handler) as listener:
