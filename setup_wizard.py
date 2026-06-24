@@ -22,17 +22,10 @@ Config.raise_on_interrupt = True
 
 def capture_hotkey(prompt: str, default: str) -> str:
     """Capture a single keypress from the user."""
-    import termios
-    import tty
-
     console.print(f"\n  [bold]{prompt}[/bold]")
     console.print(f"  [dim]Press any key... (default: {default.upper()})[/dim]")
 
     captured = [None]
-
-    # Save terminal settings and switch to raw mode (no echo)
-    fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
 
     def on_press(key):
         try:
@@ -46,12 +39,26 @@ def capture_hotkey(prompt: str, default: str) -> str:
             captured[0] = default
         return False
 
+    # On Unix, switch the terminal to raw mode so the keypress isn't echoed.
+    # Windows has no termios/tty; pynput's listener captures the key without it.
+    old_settings = None
+    fd = None
     try:
+        import termios
+        import tty
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
         tty.setraw(fd)
+    except Exception:
+        old_settings = None  # Non-Unix or non-tty stdin: skip raw mode
+
+    try:
         with keyboard.Listener(on_press=on_press) as listener:
             listener.join()
     finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        if old_settings is not None:
+            import termios
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
     result = captured[0] or default
     console.print(f"  [green]\u2713[/green] Set to [bold cyan]{result.upper()}[/bold cyan]")
