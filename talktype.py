@@ -216,7 +216,7 @@ Examples:
     )
     parser.add_argument(
         "--api-model",
-        default=None,
+        default=trans.get("api_model"),
         help="Model name for OpenAI-compatible APIs (default: whisper-1)"
     )
     parser.add_argument(
@@ -560,7 +560,11 @@ def transcribe_api(wav_buffer: io.BytesIO) -> str:
         files = {"file": ("audio.wav", wav_buffer, "audio/wav")}
         data = {"language": config.language}
 
-    resp = requests.post(config.api, files=files, data=data, timeout=240)
+    headers = {}
+    api_key = os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    resp = requests.post(config.api, files=files, data=data, headers=headers, timeout=240)
     resp.raise_for_status()
 
     # Handle both JSON {"text": "..."} and plain text responses
