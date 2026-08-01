@@ -34,25 +34,25 @@ echo "Installing system dependencies..."
 case "$DISTRO" in
     ubuntu|debian|linuxmint)
         sudo apt-get update -qq
-        sudo apt-get install -y -qq xdotool xclip portaudio19-dev python3-venv
+        sudo apt-get install -y -qq xautomation wmctrl x11-utils portaudio19-dev python3-venv
         ;;
     fedora|centos|rhel)
         sudo dnf check-update || sudo yum check-update # Check if dnf is available, otherwise try yum
-        sudo dnf install -y xdotool xclip portaudio-devel python3-venv || \
-        sudo yum install -y xdotool xclip portaudio-devel python3-venv
+        sudo dnf install -y xautomation wmctrl xorg-x11-utils portaudio-devel python3-venv || \
+        sudo yum install -y xautomation wmctrl xorg-x11-utils portaudio-devel python3-venv
         ;;
     arch|manjaro)
         sudo pacman -Sy --noconfirm
-        sudo pacman -S --noconfirm xdotool xclip portaudio python-venv
+        sudo pacman -S --noconfirm xautomation wmctrl xorg-xprop portaudio python-venv
         ;;
     suse|opensuse|sles)
         sudo zypper refresh
-        sudo zypper install -y xdotool xclip portaudio-devel # venv comes with python in arch
+        sudo zypper install -y xautomation wmctrl xprop portaudio-devel # venv comes with python in arch
         ;;
     *)
         echo "Unsupported distribution: $DISTRO"
         echo "Attempting to install common dependencies. This might fail."
-        echo "Please install 'xdotool', 'xclip', 'portaudio-dev' (or equivalent), and 'python3-venv' manually."
+        echo "Please install 'xautomation' (for xte), 'wmctrl', 'xprop', 'portaudio-dev' (or equivalent), and 'python3-venv' manually."
         ;;
 esac
 
