@@ -1,3 +1,14 @@
+# scottnotrobot fork - hacked this for my own use only on linux
+
+there's a fix here for groq, which i'm liking
+
+but more importantly i found xdotool would differentiate terminals
+from other apps like mousepad and synergy and use ctrl-v instead of
+typing.  i wanted talktype to ALWAYS emulate typing... e.g. sometimes
+apps override ctrl-shift-v or whatever so plain typing just seems more
+universal to me.  in particular allowing it to type into a
+synergy/deskflow/etc type external machine.
+
 # TalkType
 
 **Push-to-talk voice typing for your terminal.**
