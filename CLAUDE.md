@@ -10,7 +10,7 @@ TalkType is a push-to-talk voice typing tool that works system-wide. Press F9, s
 
 ```bash
 # Linux dependencies
-sudo apt install xdotool xclip portaudio19-dev
+sudo apt install xautomation wmctrl x11-utils portaudio19-dev
 
 # macOS dependencies
 brew install portaudio
@@ -197,7 +197,7 @@ TalkType has two recovery mechanisms:
 
 ### Platform Differences
 
-Linux uses xdotool/xclip. Windows/macOS use pyautogui. The `is_terminal_window()` function has OS-specific terminal detection to choose the correct paste shortcut.
+Linux uses xte (xautomation) to type text character by character; wmctrl/xprop handle window focus. Windows/macOS use pyautogui.write(). No clipboard or paste shortcuts are used.
 
 ## Testing Changes
 

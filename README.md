@@ -1,3 +1,14 @@
+# scottnotrobot fork - hacked this for my own use only on linux
+
+there's a fix here for groq, which i'm liking
+
+but more importantly i found xdotool would differentiate terminals
+from other apps like mousepad and synergy and use ctrl-v instead of
+typing.  i wanted talktype to ALWAYS emulate typing... e.g. sometimes
+apps override ctrl-shift-v or whatever so plain typing just seems more
+universal to me.  in particular allowing it to type into a
+synergy/deskflow/etc type external machine.
+
 # TalkType
 
 **Push-to-talk voice typing for your terminal.**
@@ -23,7 +34,7 @@ Built for developers who want:
 - **Cross-platform**: Linux, Windows, macOS
 - **Local Whisper**: Uses faster-whisper for fast, private transcription
 - **API mode**: Connect to any Whisper-compatible API server
-- **Smart paste**: Auto-detects terminals vs other apps (Ctrl+Shift+V vs Ctrl+V)
+- **Direct typing**: Text is typed character by character (xte) — no clipboard, no paste shortcuts
 - **Window focus**: Remembers where you started — switch apps while speaking
 - **Configurable**: Choose your hotkey, model size, and language
 
@@ -33,7 +44,7 @@ Built for developers who want:
 
 ```bash
 git clone https://github.com/lmacan1/talktype.git && cd talktype
-sudo apt install xdotool xclip portaudio19-dev
+sudo apt install xautomation wmctrl x11-utils portaudio19-dev
 python3 -m venv venv && source venv/bin/activate
 pip install -e .
 talktype  # Setup wizard launches automatically
@@ -43,7 +54,7 @@ talktype  # Setup wizard launches automatically
 
 ```bash
 # System dependencies
-sudo apt install xdotool xclip portaudio19-dev
+sudo apt install xautomation wmctrl x11-utils portaudio19-dev
 
 # Clone and install
 git clone https://github.com/lmacan1/talktype.git
@@ -302,7 +313,7 @@ TalkType works in any browser text field — it's not just for terminals:
 2. Press F9, speak, press F9
 3. Your words appear in the browser
 
-Since TalkType uses clipboard + standard paste (Ctrl+V / Cmd+V), it works anywhere that accepts pasted text.
+Since TalkType types each character directly (no clipboard involved), it works anywhere that accepts keyboard input.
 
 ## Troubleshooting
 
@@ -332,7 +343,7 @@ Make sure your microphone is set as the default input device in Windows Sound se
 1. **Global hotkey capture** (pynput) — works even when other apps are focused
 2. **Audio recording** (sounddevice) — captures from your microphone
 3. **Local transcription** (faster-whisper) — Whisper running on your machine
-4. **Smart paste** (pyperclip + OS-specific) — detects terminal vs other apps
+4. **Direct typing** (xte on Linux, pyautogui elsewhere) — types each character into the focused window
 
 ```
 [F9 Press] → Start Recording → [Speak] → [F9 Press] → Stop Recording
@@ -341,14 +352,14 @@ Make sure your microphone is set as the default input device in Windows Sound se
                                                             ↓
                                                     Focus Original Window
                                                             ↓
-                                                    Paste Text
+                                                    Type Text (xte)
 ```
 
 ## Contributing
 
 Contributions welcome! Some ideas:
 - [ ] Voice activity detection (auto-stop on silence)
-- [ ] Wayland support (wtype instead of xdotool)
+- [ ] Wayland support (wtype instead of xte)
 - [ ] Tray icon / visual indicator
 - [ ] Custom vocabulary/prompts
 - [ ] Streaming transcription

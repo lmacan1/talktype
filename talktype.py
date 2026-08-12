@@ -29,7 +29,6 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-import pyperclip
 import requests
 import sounddevice as sd
 from pynput import keyboard
@@ -58,13 +57,11 @@ TERMINALS = {
     ]
 }
 
-
 # === State ===
 class State:
     IDLE = 0
     RECORDING = 1
     TRANSCRIBING = 2
-
 
 state = State.IDLE
 state_lock = threading.Lock()
@@ -83,7 +80,6 @@ PASTE_DEBOUNCE_MS = 500   # Ignore paste calls within 500ms
 
 # Debug logging for paste investigation (set to True to diagnose issues)
 DEBUG_PASTE = False
-
 
 class TranscriptionHistory:
     """Persists transcriptions to ~/.cache/talktype/history.jsonl for recovery."""
@@ -167,10 +163,8 @@ class TranscriptionHistory:
             pass
         return None
 
-
 # === Config File Loading ===
 CONFIG_PATH = Path.home() / ".config" / "talktype" / "config.yaml"
-
 
 def load_config_file() -> dict:
     """Load config from YAML file if it exists."""
@@ -181,7 +175,6 @@ def load_config_file() -> dict:
         except Exception:
             pass
     return {}
-
 
 # === Argument Parsing ===
 def parse_args():
@@ -216,7 +209,7 @@ Examples:
     )
     parser.add_argument(
         "--api-model",
-        default=None,
+        default=trans.get("api_model"),
         help="Model name for OpenAI-compatible APIs (default: whisper-1)"
     )
     parser.add_argument(
@@ -263,20 +256,19 @@ Examples:
     )
     return parser.parse_args()
 
-
 # === Dependency Checks ===
 def check_dependencies():
     """Verify system dependencies based on OS."""
     if SYSTEM == "Linux":
         missing = []
-        for cmd in ("xdotool", "xclip"):
+        for cmd in ("xte", "wmctrl", "xprop"):
             try:
                 subprocess.run(["which", cmd], capture_output=True, check=True)
             except (subprocess.CalledProcessError, FileNotFoundError):
                 missing.append(cmd)
         if missing:
             print(f"Missing Linux dependencies: {', '.join(missing)}")
-            print(f"Install with: sudo apt install {' '.join(missing)}")
+            print("Install with: sudo apt install xautomation wmctrl x11-utils")
             sys.exit(1)
 
     # Check microphone
@@ -288,7 +280,6 @@ def check_dependencies():
     except Exception as e:
         print(f"Audio device error: {e}")
         sys.exit(1)
-
 
 def load_whisper_model():
     """Load local Whisper model if not using API."""
@@ -314,7 +305,6 @@ def load_whisper_model():
             print("Or use --api flag to connect to a Whisper API server")
             sys.exit(1)
 
-
 # === Audio Feedback ===
 def beep(freq: float, duration: float, volume: float = 0.12):
     """Play beep without blocking."""
@@ -324,7 +314,6 @@ def beep(freq: float, duration: float, volume: float = 0.12):
         sd.play(wave, SAMPLE_RATE)
     except:
         pass  # Ignore audio errors
-
 
 def beep_start():
     beep(880, 0.08)
@@ -338,14 +327,12 @@ def beep_error():
 def beep_success():
     beep(660, 0.08)
 
-
 # === Terminal Title (visual status) ===
 def set_terminal_title(title: str):
     """Set terminal window title for visual status."""
     # ANSI escape sequence to set terminal title
     sys.stdout.write(f"\033]0;{title}\007")
     sys.stdout.flush()
-
 
 def show_status(status: str, detail: str = ""):
     """Show status in minimal mode (clears and centers)."""
@@ -368,16 +355,21 @@ def show_status(status: str, detail: str = ""):
     sys.stdout.write(f"{'─' * 40}\n")
     sys.stdout.flush()
 
-
 # === Window Management (OS-specific) ===
 def get_active_window():
     """Get the currently focused window identifier."""
     try:
         if SYSTEM == "Linux":
-            return subprocess.check_output(
-                ["xdotool", "getactivewindow"],
+            # xte has no window-management commands, so use xprop instead
+            out = subprocess.check_output(
+                ["xprop", "-root", "_NET_ACTIVE_WINDOW"],
                 stderr=subprocess.DEVNULL
-            ).strip()
+            ).decode()
+            # Output looks like: _NET_ACTIVE_WINDOW(WINDOW): window id # 0x3c00007
+            window_id = out.rsplit(" ", 1)[-1].strip()
+            if not window_id.startswith("0x"):
+                return None
+            return window_id.encode()
         elif SYSTEM == "Windows":
             import ctypes
             return ctypes.windll.user32.GetForegroundWindow()
@@ -389,15 +381,15 @@ def get_active_window():
         return None
     return None
 
-
 def focus_window(window_id):
     """Focus a specific window."""
     if not window_id:
         return
     try:
         if SYSTEM == "Linux":
+            wid = window_id.decode() if isinstance(window_id, bytes) else str(window_id)
             subprocess.run(
-                ["xdotool", "windowactivate", "--sync", window_id],
+                ["wmctrl", "-i", "-a", wid],
                 stderr=subprocess.DEVNULL
             )
         elif SYSTEM == "Windows":
@@ -409,7 +401,6 @@ def focus_window(window_id):
             subprocess.run(["osascript", "-e", script], stderr=subprocess.DEVNULL)
     except:
         pass
-
 
 def is_terminal_window(window_id) -> bool:
     """Check if the window is a terminal."""
@@ -440,12 +431,10 @@ def is_terminal_window(window_id) -> bool:
         pass
     return False
 
-
 # === Recording ===
 def audio_callback(indata, frames, time_info, status):
     """Accumulate audio chunks."""
     audio_chunks.append(indata.copy())
-
 
 def start_recording():
     """Start recording from microphone."""
@@ -463,7 +452,6 @@ def start_recording():
     set_terminal_title("🎤 RECORDING...")
     show_status("🎤 RECORDING", "Press hotkey to stop")
 
-
 def stop_recording() -> np.ndarray:
     """Stop recording, return audio array."""
     global stream
@@ -478,7 +466,6 @@ def stop_recording() -> np.ndarray:
     if not audio_chunks:
         return np.array([], dtype=np.float32)
     return np.concatenate(audio_chunks).flatten()
-
 
 # === Transcription ===
 # Common Whisper hallucinations on silence/noise
@@ -501,7 +488,6 @@ HALLUCINATION_WORDS = {
     "nope", "well", "right", "hey", "hi", "hello", "what", "hm",
 }
 
-
 def is_hallucination(text: str) -> bool:
     """Check if text is likely a Whisper hallucination."""
     t = text.lower().strip()
@@ -514,7 +500,6 @@ def is_hallucination(text: str) -> bool:
     if len(t) < 40:
         return any(phrase in t for phrase in HALLUCINATION_PHRASES)
     return False
-
 
 def has_speech(audio: np.ndarray, threshold: float = 0.01, segment_ms: int = 50) -> bool:
     """Check if audio contains actual speech using segment-based detection.
@@ -536,12 +521,10 @@ def has_speech(audio: np.ndarray, threshold: float = 0.01, segment_ms: int = 50)
 
     return False
 
-
 def is_openai_api(url: str) -> bool:
     """Check if URL looks like an OpenAI-compatible API."""
     openai_patterns = ["/v1/audio/transcriptions", "/v1/audio/", "openai", "groq", "deepgram"]
     return any(p in url.lower() for p in openai_patterns)
-
 
 def transcribe_api(wav_buffer: io.BytesIO) -> str:
     """Transcribe using API (supports OpenAI-compatible and custom APIs)."""
@@ -560,7 +543,11 @@ def transcribe_api(wav_buffer: io.BytesIO) -> str:
         files = {"file": ("audio.wav", wav_buffer, "audio/wav")}
         data = {"language": config.language}
 
-    resp = requests.post(config.api, files=files, data=data, timeout=240)
+    headers = {}
+    api_key = os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    resp = requests.post(config.api, files=files, data=data, headers=headers, timeout=240)
     resp.raise_for_status()
 
     # Handle both JSON {"text": "..."} and plain text responses
@@ -569,7 +556,6 @@ def transcribe_api(wav_buffer: io.BytesIO) -> str:
         return result.get("text", "").strip()
     except:
         return resp.text.strip()
-
 
 def transcribe(audio: np.ndarray) -> str:
     """Transcribe audio to text."""
@@ -606,7 +592,6 @@ def transcribe(audio: np.ndarray) -> str:
 
     return text
 
-
 # === Paste ===
 def paste_text(text: str):
     """Paste text into the target window."""
@@ -626,57 +611,42 @@ def paste_text(text: str):
         print(f"[DEBUG] text length: {len(text)}, preview: {text[:50]!r}")
         print(f"[DEBUG] call stack:\n{''.join(traceback.format_stack()[-4:-1])}")
 
-    # Save old clipboard
-    try:
-        old_clipboard = pyperclip.paste()
-    except:
-        old_clipboard = None
-
-    # Set new clipboard
-    pyperclip.copy(text)
-    time.sleep(0.05)
-
     # Focus original window
     focus_window(target_window)
     time.sleep(0.05)
 
-    # Determine paste shortcut
-    is_terminal = is_terminal_window(target_window) if target_window else False
-
     if SYSTEM == "Linux":
-        key = "ctrl+shift+v" if is_terminal else "ctrl+v"
+        # Type the text one character at a time with xte.
+        # No clipboard, no Ctrl+V / Ctrl+Shift+V — each character is
+        # synthesized as its own key event, so this works identically in
+        # terminals, browsers, and plain X11 apps.
+        commands = []
+        for ch in text:
+            if ch == "\n":
+                commands.append("key Return")
+            elif ch == "\t":
+                commands.append("key Tab")
+            elif ch == " ":
+                commands.append("key space")
+            else:
+                commands.append(f"str {ch}")
+            # Small per-character delay so slow apps don't drop events
+            commands.append("usleep 3000")
         if DEBUG_PASTE:
-            print(f"[DEBUG] xdotool sending: {key} (is_terminal={is_terminal})")
-        # Use --clearmodifiers to prevent interference from held modifier keys
-        # Use --delay to ensure clean key release
-        subprocess.run(["xdotool", "key", "--clearmodifiers", "--delay", "50", key], stderr=subprocess.DEVNULL)
+            print(f"[DEBUG] xte typing {len(text)} chars, one at a time")
+        subprocess.run(["xte", *commands], stderr=subprocess.DEVNULL)
         if DEBUG_PASTE:
-            print(f"[DEBUG] xdotool completed")
+            print(f"[DEBUG] xte completed")
 
     elif SYSTEM == "Windows":
         import pyautogui
-        if is_terminal:
-            # Windows Terminal and modern terminals use Ctrl+V
-            pyautogui.hotkey('ctrl', 'v')
-        else:
-            pyautogui.hotkey('ctrl', 'v')
+        # Type character by character instead of pasting
+        pyautogui.write(text, interval=0.01)
 
     elif SYSTEM == "Darwin":
         import pyautogui
-        pyautogui.hotkey('command', 'v', interval=0.05)  # 50ms between keys for cold start reliability
-
-    # Restore old clipboard (scale delay by text length to avoid race condition)
-    if old_clipboard:
-        def restore():
-            # Base 1.0s + 10ms per 100 chars, capped at 3.0s
-            delay = min(3.0, max(1.0, 1.0 + len(text) * 0.0001))
-            time.sleep(delay)
-            try:
-                pyperclip.copy(old_clipboard)
-            except:
-                pass
-        threading.Thread(target=restore, daemon=True).start()
-
+        # Type character by character instead of pasting
+        pyautogui.write(text, interval=0.01)
 
 # === Main Logic ===
 def transcribe_and_paste(audio: np.ndarray):
@@ -712,7 +682,6 @@ def transcribe_and_paste(audio: np.ndarray):
         set_terminal_title("TalkType - Ready")
         show_status("● READY", "Press F9 to record")
 
-
 def get_hotkey(key_name: str):
     """Convert key name string to pynput key."""
     key_name = key_name.lower().strip()
@@ -723,7 +692,6 @@ def get_hotkey(key_name: str):
         "f10": keyboard.Key.f10, "f11": keyboard.Key.f11, "f12": keyboard.Key.f12,
     }
     return key_map.get(key_name, keyboard.Key.f9)
-
 
 def create_hotkey_handler(hotkey):
     """Create the hotkey handler function."""
@@ -753,7 +721,6 @@ def create_hotkey_handler(hotkey):
             # TRANSCRIBING: ignore
 
     return on_press
-
 
 def create_recovery_handler(recovery_key):
     """Create the recovery hotkey handler (re-paste last transcription)."""
@@ -786,7 +753,6 @@ def create_recovery_handler(recovery_key):
         show_status("↩️ RECOVERED", last_text[:50])
 
     return on_press
-
 
 def create_retry_handler(retry_key):
     """Create the retry hotkey handler (re-transcribe from saved audio)."""
@@ -849,7 +815,6 @@ def create_retry_handler(retry_key):
 
     return on_press
 
-
 class _WindowsLock:
     def __init__(self, handle):
         self._handle = handle
@@ -859,7 +824,6 @@ class _WindowsLock:
         if self._handle:
             ctypes.windll.kernel32.CloseHandle(self._handle)
             self._handle = None
-
 
 def acquire_instance_lock():
     """Ensure only one instance of TalkType runs at a time."""
@@ -900,7 +864,6 @@ def acquire_instance_lock():
             except Exception:
                 print("TalkType is already running")
             sys.exit(1)
-
 
 def main():
     global config, history
@@ -965,7 +928,6 @@ def main():
 
     with keyboard.Listener(on_press=combined_handler) as listener:
         listener.join()
-
 
 if __name__ == "__main__":
     main()
